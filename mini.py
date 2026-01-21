@@ -1,12 +1,27 @@
-import curses, sys, os
+import curses, sys, os, time, tty
 
 def save_file(filename, lines):
     with open(filename, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
+def debug_keys():
+    """Debug mode to see what key codes are being sent"""
+    print("\n=== KEY DEBUG MODE ===")
+    print("Press keys to see their codes. Press Ctrl+C to exit.\n")
+    try:
+        tty.setraw(sys.stdin)
+        while True:
+            key = sys.stdin.read(1)
+            if key:
+                print(f"Key: {repr(key)} | Ord: {ord(key)}")
+    except KeyboardInterrupt:
+        print("\nExiting debug mode...")
+    finally:
+        tty.setcbreak(sys.stdin)
+
 def editor(stdscr, filename):
     curses.curs_set(1)
-    stdscr.keypad(True)
+    stdscr.keypad(True)  # Keep keypad for arrow keys
     try:
         with open(filename, "r", encoding="utf-8") as f:
             lines = [ln.rstrip("\n") for ln in f.readlines()]
@@ -44,10 +59,41 @@ def editor(stdscr, filename):
         # control keys (strings for printable/control, ints for special keys)
         if isinstance(key, str):
             if key == "\x1b":  # Esc
-                return
+                status = "Exiting in 5 seconds... Press any key to cancel."
+                stdscr.nodelay(True)
+                cancelled = False
+                
+                for countdown in range(50):  # 50 * 0.1 = 5 seconds
+                    h, w = stdscr.getmaxyx()
+                    stdscr.erase()
+                    for i in range(h - 1):
+                        idx = top + i
+                        if idx < len(lines):
+                            stdscr.addstr(i, 0, lines[idx][:w-1])
+                    stdscr.addstr(h - 1, 0, status[:w-1], curses.A_REVERSE)
+                    stdscr.refresh()
+                    
+                    try:
+                        cancel_key = stdscr.get_wch()
+                        status = "Exit cancelled."
+                        cancelled = True
+                        break
+                    except:
+                        # No key pressed yet
+                        import time
+                        time.sleep(0.1)
+                
+                stdscr.nodelay(False)
+                if not cancelled:
+                    return
+                continue
+            
             if key == "\x13":  # Ctrl-S
-                save_file(filename, lines)
-                status = f"Saved: {os.path.basename(filename)}"
+                try:
+                    save_file(filename, lines)
+                    status = f"Saved: {os.path.basename(filename)}"
+                except Exception as e:
+                    status = f"Save error: {str(e)}"
                 continue
             if key == "\n":
                 cur = lines[cy]
@@ -56,7 +102,7 @@ def editor(stdscr, filename):
                 cy += 1
                 cx = 0
                 continue
-            if key in ("\x7f", "\b"):  # backspace
+            if key in ("\x7f", "\b", "\x08"):  # backspace (DEL, backspace, Ctrl-H)
                 if cx > 0:
                     lines[cy] = lines[cy][:cx - 1] + lines[cy][cx:]
                     cx -= 1
@@ -74,7 +120,17 @@ def editor(stdscr, filename):
                 continue
         else:
             # special keys (integers)
-            if key == curses.KEY_UP:
+            if key == curses.KEY_BACKSPACE:
+                if cx > 0:
+                    lines[cy] = lines[cy][:cx - 1] + lines[cy][cx:]
+                    cx -= 1
+                elif cy > 0:
+                    prev_len = len(lines[cy - 1])
+                    lines[cy - 1] += lines[cy]
+                    lines.pop(cy)
+                    cy -= 1
+                    cx = prev_len
+            elif key == curses.KEY_UP:
                 if cy > 0:
                     cy -= 1
                 cx = min(cx, len(lines[cy]))
@@ -109,83 +165,80 @@ def editor(stdscr, filename):
 def mini(filename):
     try:
         curses.wrapper(editor, filename)
-
-    finally:
-        curses.endwin()
+    except Exception as e:
+        # Ensure curses is properly cleaned up even on error
+        try:
+            curses.endwin()
+        except:
+            pass
+        print(f"Editor error: {e}")
 
 if __name__ == "__main__":
+    # Disable flow control to prevent Ctrl+S being intercepted
+    os.system("stty -ixon")
+    
     if len(sys.argv) < 2:
         print("Usage: python mini.py <file>")
     else:
         mini(sys.argv[1])
-# ...existing code...
-intro = True
 
-while intro == True:
-    try:
-        print("MINI - not knockoff nano. Only for handling .txt files")
-        ask2 = input("Do you want to OPEN a file, CREATE a file, RENAME a file, or DELETE a file?")
-        ask2 = ask2.lower()
+try:
+    print("MINI - not knockoff nano. Only for handling .txt files")
+    ask2 = input("Do you want to OPEN a file, CREATE a file, RENAME a file, DELETE a file, or DEBUG keys?")
+    ask2 = ask2.lower()
 
-        if ask2 == "open":
-            try:
-                fileName = input("What is the name of the file you wish to open?")
-                fileName = str(fileName+".txt")
-                mini(fileName)
-                    
-            except:
-                print("Error opening file and file editor!")
-                    
-            finally:
-                fileName.close()
-        elif ask2 == "create":
-            try:
-                fileName = input("What do you want to call your new file?")
-                fileName = str(fileName+".txt")
-                file = open(fileName, "w")
-                mini(fileName)
-                    
-            except:
-                print("Error creating file and opening file editor!")
-                    
-            finally:
-                file.close()
+    if ask2 == "debug":
+        debug_keys()
+    elif ask2 == "open":
+        try:
+            fileName = input("What is the name of the file you wish to open?")
+            fileName = str(fileName+".txt")
+            mini(fileName)
                 
-        elif ask2 == "rename":
-            try:
-                fileName = input("What is the current name of the file you wish to rename?")
-                fileName = str(fileName+".txt")
-                fileNewName = input("What is the name you wish to rename the file to?")
-                fileName = str(fileNewName+".txt")
-
-                file = open(fileName, "r")
-                newFile = open(fileNewName, "w")
-                read = "nil"
-
-                while read != "END":
-                    read = file.readline()
-                    newFile.write(read="\n")
+        except Exception as e:
+            print(f"Error opening file and file editor! {e}")
+    elif ask2 == "create":
+        try:
+            fileName = input("What do you want to call your new file?")
+            fileName = str(fileName+".txt")
+            # Create empty file
+            open(fileName, "w").close()
+            mini(fileName)
+                
+        except Exception as e:
+            print(f"Error creating file and opening file editor! {e}")
+            
+    elif ask2 == "rename":
+        try:
+            oldName = input("What is the current name of the file you wish to rename?")
+            oldName = str(oldName+".txt")
+            newName = input("What is the name you wish to rename the file to?")
+            newName = str(newName+".txt")
+            os.rename(oldName, newName)
+            print(f"File renamed from {oldName} to {newName}")
                     
-            except:
-                print("File renaming error!")
-                    
-            finally:
-                file.close()
-                newFile.close()
+        except Exception as e:
+            print(f"File renaming error! {e}")
     
-        elif ask2 == "delete":
-            try:
-                fileName = input("What is the name of the file you wish to delete?")
-                fileName = str(fileName+".txt")
-                os.remove(fileName)
-                print("File deleted successfully.")
+    elif ask2 == "delete":
+        try:
+            fileName = input("What is the name of the file you wish to delete?")
+            fileName = str(fileName+".txt")
+            os.remove(fileName)
+            print("File deleted successfully.")
                     
-            except:
-                print("File deletion error!")
+        except Exception as e:
+            print(f"File deletion error! {e}")
 
-        else:
-            print("Invalid option selected.")  
+    elif ask2 == "exit":
+        print("Exiting MINI. Goodbye!")
+        time.sleep(5)
+        intro = False
+        sys.exit()
+
+    else:
+        print("Invalid option selected.")  
     
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+except Exception as e:
+    print(f"An unexpected error occurred: {e}")
                             
